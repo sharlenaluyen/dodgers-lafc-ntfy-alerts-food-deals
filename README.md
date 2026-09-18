@@ -1,122 +1,122 @@
 # Dodgers Win Alerts
 
-Sends a push notification to every subscriber when the LA Dodgers win **at home** (Dodger Stadium) — once right away, and again as a bundled recap the next morning. Built on [ntfy.sh](https://ntfy.sh) (free, open-source pub/sub push notifications — no account, no per-subscriber cost) and the free MLB Stats API (no API key needed for scores).
+Sends a push notification when the LA Dodgers win **at home** (Dodger Stadium): once right away, and again the next morning. Runs as a **Cloudflare Worker** on Cron Triggers (free, persistent, no server to keep running), publishes through [ntfy.sh](https://ntfy.sh) (free, open-source push; no account, no per-subscriber cost), and reads scores from the free MLB Stats API (no API key needed).
 
-Away wins and any loss are silently ignored — nobody gets notified about those.
+Away wins/losses are silently ignored.
 
 ## How it works
 
-There's no subscriber database in this app. Everyone subscribes directly to one shared **ntfy topic** in the ntfy app (or a browser) — the server just publishes to that topic once, and ntfy fans it out to everyone listening. That also means there's no signup form to fill out and nothing here ever touches a phone number.
+There's no subscriber database and no always-on server. Cloudflare's Cron Triggers call this Worker on a schedule; each run makes a couple of outbound HTTP calls and exits. Everyone subscribes directly to one shared **ntfy topic** (ddbb-dodgers-panda-win), and the Worker just publishes to it once, and ntfy send out a notification to subscribers.
 
-- **`server.js`** — Express app: serves the info page (`public/index.html`) telling people how to subscribe, exposes an admin test-notify endpoint, and wires up the two cron schedules from `jobs.js`.
-- **`jobs.js`** — the two background jobs, kept separate so they're testable on their own:
-  - `checkAndNotify()` — runs every 5 minutes (configurable). Looks for a Dodgers game that just went `Final`. If it was a **home win**, publishes to the ntfy topic immediately. Away wins and home losses are recorded (so they're never re-checked) but nothing is published.
-  - `sendMorningRecap()` — runs once a day at 8:00 AM Pacific (configurable). Publishes one bundled message covering every home win since the last recap — so a doubleheader sweep is one notification, not two.
-- **`mlb.js`** — polls `statsapi.mlb.com` (free, keyless) for the Dodgers' games in the last ~24h, and flags whether each finished game was (a) a win and (b) actually played at Dodger Stadium — see "How home games are detected" below.
-- **`db.js`** — SQLite file (`data.sqlite`) holding a row per `gamePk` already evaluated (home/away, win/loss, and whether its morning recap has gone out yet), so nothing is ever double-published even with the checker running every 5 minutes.
-- **`ntfy.js`** — publishes a message to the ntfy topic via a single HTTP POST. No subscriber list to loop over — one publish reaches everyone.
-- **`test-jobs.js`** — `npm test` runs a mocked end-to-end pass (a home win, an away win, a home loss, and a second home win the same day) with no real network calls, and checks: only home wins publish immediately, the morning recap bundles multiple wins into one message, and both jobs are safe to re-run without double-publishing.
+There's also no game-history database. A tiny flag per game in **Workers KV** (Cloudflare's key-value store) is all that prevents a game from being announced twice. It expires on its own after 2 days, so nothing is kept around longer than that.
+
+- **`src/index.js`** — the Worker entry. `scheduled()` runs on every Cron Trigger fire and dispatches to the right job; `fetch()` exposes a `/test-notify` route for manually verifying the ntfy path.
+- **`src/jobs.js`** — the two jobs:
+  - `checkAndNotify()` — looks for a Dodgers game that just went `Final`. If it was a **home win** and hasn't been flagged yet in KV, publishes to ntfy immediately and sets the flag.
+  - `sendMorningRecap()` — bundles every home win found in the lookback window that hasn't had its recap flag set into one message (so a doubleheader sweep is one notification, not two).
+- **`src/mlb.js`** — polls `statsapi.mlb.com` (free, keyless) for the Dodgers' games in the last ~24h, and flags whether each finished game was (a) a win and (b) actually played at Dodger Stadium — see "How home games are detected" below.
+- **`src/ntfy.js`** — publishes a message to the ntfy topic via a single HTTP POST.
+- **`test.js`** — `npm test` runs a mocked pass (a home win, an away win, a home loss, and a second home win the same run) with fake KV storage and no real network calls, and checks: only home wins publish, the morning recap bundles multiple wins into one message, and both jobs are safe to re-run without double-publishing.
+- **`wrangler.toml`** — Worker config: the Cron Trigger schedule, non-secret vars, and the KV namespace binding.
 
 ### How home games are detected
 
-The MLB API's venue field for a Dodgers home game is currently `"UNIQLO Field at Dodger Stadium"` (the stadium has a naming-rights sponsor as of the 2026 season) rather than a plain `"Dodger Stadium"` — I checked the live API rather than assuming. The matcher looks for the substring `"dodger stadium"` (case-insensitive, configurable via `HOME_VENUE_MATCH` in `.env`), so it survives that kind of sponsor-name prefixing. If the venue is ever renamed to drop "Dodger Stadium" from it entirely, update `HOME_VENUE_MATCH` to match.
+The MLB API's venue field for a Dodgers home game is currently `"UNIQLO Field at Dodger Stadium"` (the stadium has a naming-rights sponsor as of the 2026 season) rather than a plain `"Dodger Stadium"` — checked against the live API rather than assumed. The matcher looks for the substring `"dodger stadium"` (case-insensitive, configurable via `HOME_VENUE_MATCH` in `wrangler.toml`), so it survives that kind of sponsor-name prefixing.
+
+### Why the check only runs part of the day
+
+Checking every 15 minutes, 24/7, all season would burn through free-tier budgets unnecessarily and just isn't useful overnight when there's no game. Instead, `wrangler.toml`'s Cron Triggers only fire every 15 minutes from roughly 1:00 PM to 11:45 PM Pacific (the realistic window for a Dodgers game to be in progress or wrapping up) plus once daily at 8:00 AM Pacific for the recap. See the comment above `[triggers]` in `wrangler.toml` for the UTC math and a note on the Daylight/Standard Time caveat.
 
 ## 1. Pick a topic name
 
-Anyone who knows the topic name can subscribe to it (or, on the public `ntfy.sh` server, publish to it too) — there's no per-subscriber auth. Treat it like a shared secret: long and unguessable, not something obvious like `dodgers-alerts`. This app defaults to:
+Anyone who knows the ntfy topic name can subscribe to it (or, on the public `ntfy.sh` server, publish to it too) — there's no per-subscriber auth. Treat it like a shared secret: long and unguessable. This app defaults to:
 
 ```
-NTFY_TOPIC=ddbb-dodgers-panda-win
+NTFY_TOPIC = "ddbb-dodgers-panda-win"
 ```
 
-Change it in `.env` if you want your own.
+set in `wrangler.toml`'s `[vars]`. Change it there if you want your own.
 
-## 2. Configure this app
+## 2. Set up
 
 ```bash
 cd dodgers-sms-alerts
 npm install
-cp .env.example .env
+cp .dev.vars.example .dev.vars   # local-dev secret override, gitignored
 ```
 
-Edit `.env` if you want to change the defaults:
-
-```
-NTFY_TOPIC=ddbb-dodgers-panda-win     # your shared topic name
-NTFY_SERVER=https://ntfy.sh           # or your own self-hosted ntfy instance
-ADMIN_SECRET=some-random-string       # protects the /admin/test-notify endpoint
-```
-
-Run it locally:
+Log in to Cloudflare (one-time, browser-based):
 
 ```bash
-npm start
+npx wrangler login
 ```
 
-This starts the web server on `http://localhost:3000`, immediately runs one score check, then repeats every 5 minutes, plus a once-daily morning recap.
+Create the KV namespace this app uses for its dedup flags, then paste the printed `id` into `wrangler.toml`'s `[[kv_namespaces]]` block (replacing the placeholder):
 
-Run the automated check before deploying:
+```bash
+npx wrangler kv namespace create DODGERS_KV
+```
+
+Set the admin secret (protects `/test-notify`) as a real Cloudflare secret, not a plain var:
+
+```bash
+npx wrangler secret put ADMIN_SECRET
+```
+
+Run the automated check:
 
 ```bash
 npm test
 ```
 
-## 3. Subscribe to alerts
+Run it locally against real Cloudflare infra (KV included) before deploying:
 
-1. Install the free **ntfy** app: [iOS](https://apps.apple.com/us/app/ntfy/id1625396347) / [Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy) — or subscribe straight from a browser at `https://ntfy.sh/<your-topic>` (no app install needed, works as a web push subscription).
+```bash
+npm run dev
+```
+
+## 3. Deploy
+
+```bash
+npm run deploy
+```
+
+That registers the Worker and its Cron Triggers with Cloudflare — no server to host, nothing to keep running yourself. To redeploy after a change, just run it again (or connect the repo in the Cloudflare dashboard under **Workers & Pages → your Worker → Settings → Builds** for git-push-to-deploy).
+
+## 4. Subscribe to alerts
+
+1. Install the free **ntfy** app: [iOS](https://apps.apple.com/us/app/ntfy/id1625396347) / [Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy) — or subscribe straight from a browser at `https://ntfy.sh/<your-topic>` (no app install needed).
 2. In the app, tap **+** and enter your topic name (e.g. `ddbb-dodgers-panda-win`).
 3. That's it — no phone number, no signup form, no account.
 
-Share your app's `/` page (`public/index.html`) with people you want subscribed — it shows the topic name and links to both app stores plus the browser-subscribe option.
+`public/index.html` is a static page with the topic name, app-store links, and the browser-subscribe link — host it wherever you like (e.g. Cloudflare Pages on a domain you already own) and share that link with people you want subscribed. It's independent of the Worker; nothing here serves it automatically.
 
 To unsubscribe, delete the topic from inside the ntfy app at any time.
 
-## 4. Test it
+## 5. Test it
 
-With the server running and reachable:
-
-- **Send yourself a one-off test notification** (doesn't touch any real game data):
+- **Send a one-off test notification** (doesn't touch any real game data):
   ```bash
-  curl -X POST "https://your-app.example.com/admin/test-notify?secret=YOUR_ADMIN_SECRET" \
-    -H "Content-Type: application/json" \
-    -d '{"title": "Test", "message": "Test from Dodgers alerts"}'
+  curl "https://your-worker.your-subdomain.workers.dev/test-notify?secret=YOUR_ADMIN_SECRET"
   ```
-- **Force a score check manually** (useful during testing) — just restart the app, it checks on boot.
-- **Confirm delivery directly against ntfy**, without your app at all:
+- **Confirm delivery directly against ntfy**, without the Worker at all:
   ```bash
   curl -d "Test message" https://ntfy.sh/YOUR_TOPIC
   ```
+- **Check the Cron Trigger fired**: Cloudflare dashboard → your Worker → **Logs**, or `npx wrangler tail`.
 
-## 5. Deploy it somewhere that stays on 24/7
+## If you'd rather not depend on the public ntfy.sh
 
-The app needs to run continuously to poll scores on a schedule (there's no incoming webhook to receive anymore — publishing is a simple outbound HTTP call). Any small always-on Node host works.
-
-### Option A: Render.com (simplest)
-
-1. Push this folder to a GitHub repo.
-2. On [render.com](https://render.com) → *New → Web Service* → connect the repo.
-3. Build command: `npm install`. Start command: `npm start`.
-4. Add the same environment variables from your `.env` under *Environment*.
-5. **Persistent storage matters here:** Render's free tier has an ephemeral filesystem, so `data.sqlite` (which tracks which games have already been processed) gets wiped on every redeploy or restart — harmless, but a restart right after a win could theoretically re-publish it. For anything beyond casual use, add a **Render Disk** (Render → your service → *Disks*, a few dollars/month) mounted at `/opt/render/project/src` (or update `db.js`'s `DB_PATH` to point at the mounted disk path).
-6. Once live, copy the `https://your-app.onrender.com` URL into `PUBLIC_BASE_URL` in your env vars.
-
-### Option B: Railway.app or Fly.io
-
-Both support a `Dockerfile`-free Node deploy plus a persistent volume, similarly priced. General steps are the same as Render: connect the repo, set env vars, attach a volume for `data.sqlite`, set the start command to `npm start`.
-
-### If you'd rather not depend on the public ntfy.sh
-
-ntfy is open-source and self-hostable — run your own [ntfy server](https://docs.ntfy.sh/install/) (a single small Docker container) and point `NTFY_SERVER` at it instead of `https://ntfy.sh`. Subscribers then point their app at your server instead of the public one.
+ntfy is open-source and self-hostable — run your own [ntfy server](https://docs.ntfy.sh/install/) (a single small Docker container somewhere) and point `NTFY_SERVER` in `wrangler.toml` at it instead of `https://ntfy.sh`. Subscribers then point their app at your server instead of the public one.
 
 ## Customizing
 
-- **Different team:** change `MLB_TEAM_ID` in `.env` (Dodgers = `119`). Any MLB team ID works. You'd also want to update `HOME_VENUE_MATCH` to that team's home venue.
-- **Away wins too:** if you decide you want away wins published as well, in `jobs.js` change `const shouldNotify = game.isHomeGame && game.dodgersWon;` to `const shouldNotify = game.dodgersWon;`.
-- **Check frequency:** `CHECK_CRON` in `.env`, standard cron syntax (default: every 5 minutes).
-- **Morning recap time:** `MORNING_CRON` and `MORNING_TZ` in `.env` (default: 8:00 AM `America/Los_Angeles`).
-- **Message wording:** edit the `text` templates in `checkAndNotify()` and `sendMorningRecap()` in `jobs.js`.
+- **Different team:** change `MLB_TEAM_ID` in `wrangler.toml` (Dodgers = `119`). Any MLB team ID works. You'd also want to update `HOME_VENUE_MATCH` to that team's home venue.
+- **Away wins too:** in `src/jobs.js`, change `g.isHomeGame && g.dodgersWon` to just `g.dodgersWon` in both `checkAndNotify()` and `sendMorningRecap()`.
+- **Check frequency/window:** edit the `crons` array in `wrangler.toml` (standard cron syntax, UTC only).
+- **Message wording:** edit the text templates in `src/jobs.js`.
 
 ## Privacy notes
 
-- The public `ntfy.sh` server is free and requires no account, but messages pass through their infrastructure (retained ~12h, then deleted) and their iOS/Android apps deliver via Firebase Cloud Messaging (Google's push infrastructure) like virtually all mobile push notifications do. See [ntfy's privacy policy](https://docs.ntfy.sh/privacy/) for details, or self-host (Option "If you'd rather not depend on the public ntfy.sh" above) to avoid both.
+- The public `ntfy.sh` server is free and requires no account, but messages pass through their infrastructure (retained ~12h, then deleted) and their iOS/Android apps deliver via Firebase Cloud Messaging (Google's push infrastructure), like virtually all mobile push notifications do. See [ntfy's privacy policy](https://docs.ntfy.sh/privacy/) for details, or self-host (see above) to avoid both.
 - The topic name is the *only* access control — anyone who has it can subscribe, and on the public server, anyone who has it can publish to it too. Keep it unguessable rather than sharing it publicly if that matters to you.

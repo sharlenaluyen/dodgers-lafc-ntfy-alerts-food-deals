@@ -1,0 +1,36 @@
+name = "dodgers-win-alerts"
+main = "src/index.js"
+compatibility_date = "2026-09-18"
+
+# Cloudflare Cron Triggers always run in UTC (no timezone support), so these
+# are tuned for Pacific *Daylight* Time (UTC-7), which covers virtually the
+# entire MLB season (regular season + postseason run April-ish through early
+# November; DST doesn't end until early November). During the off-season
+# (Pacific Standard Time, UTC-8) these run an hour later local time than the
+# comment below states — harmless, since there are no games to find then.
+#
+# - "*/15 20-23 * * *" + "*/15 0-6 * * *": together, check every 15 minutes
+#   from ~1:00 PM to ~11:45 PM Pacific — the realistic window for a Dodgers
+#   game to be in progress or just wrapping up. No point checking overnight
+#   or early morning when nothing is being played.
+# - "0 15 * * *": once-daily morning recap at 8:00 AM Pacific. Must match
+#   MORNING_CRON in src/index.js exactly.
+[triggers]
+crons = [
+  "*/15 20-23 * * *",
+  "*/15 0-6 * * *",
+  "0 15 * * *",
+]
+
+[vars]
+MLB_TEAM_ID = "119"
+HOME_VENUE_MATCH = "dodger stadium"
+NTFY_TOPIC = "ddbb-dodgers-panda-win"
+NTFY_SERVER = "https://ntfy.sh"
+
+# ADMIN_SECRET is a secret, not a var — set it with:
+#   npx wrangler secret put ADMIN_SECRET
+
+[[kv_namespaces]]
+binding = "DODGERS_KV"
+id = "bafb15bc26b5467bad335dbc66550b32"

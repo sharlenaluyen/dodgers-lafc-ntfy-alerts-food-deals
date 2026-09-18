@@ -1,21 +1,18 @@
 {
-  "name": "dodgers-sms-alerts",
-  "version": "1.0.0",
-  "description": "Push-notifies subscribers whenever the LA Dodgers win a home game, using ntfy.sh and the free MLB Stats API.",
-  "main": "server.js",
-  "type": "commonjs",
+  "name": "dodgers-win-alerts",
+  "version": "2.0.0",
+  "description": "Push-notifies subscribers whenever the LA Dodgers win a home game, using a Cloudflare Worker, ntfy.sh, and the free MLB Stats API.",
+  "main": "src/index.js",
+  "type": "module",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js",
-    "test": "node test-jobs.js"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node test.js"
   },
   "engines": {
     "node": ">=18"
   },
-  "dependencies": {
-    "better-sqlite3": "^13.0.3",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "node-cron": "^3.0.3"
+  "devDependencies": {
+    "wrangler": "^4.135.0"
   }
 }

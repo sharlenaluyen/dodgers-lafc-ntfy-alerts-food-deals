@@ -1,0 +1,5 @@
+# Local-dev overrides for `wrangler dev` (Workers' equivalent of `.env`).
+# Copy to `.dev.vars` (gitignored) and fill in. Not used in production —
+# production vars live in wrangler.toml ([vars]) and `wrangler secret put`.
+
+ADMIN_SECRET=change_me_to_something_random
