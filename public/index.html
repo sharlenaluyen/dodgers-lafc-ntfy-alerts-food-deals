@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dodgers Win Alerts</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: linear-gradient(180deg, #002b5c 0%, #00458f 100%);
+    color: #fff; padding: 24px; box-sizing: border-box;
+  }
+  .card {
+    max-width: 460px; width: 100%; background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.15); border-radius: 16px; padding: 32px;
+    backdrop-filter: blur(6px);
+  }
+  h1 { font-size: 1.6rem; margin: 0 0 8px; }
+  p.sub { opacity: 0.85; margin: 0 0 24px; line-height: 1.5; }
+  ol { margin: 0 0 20px; padding-left: 22px; line-height: 1.7; }
+  ol li { margin-bottom: 6px; }
+  .topic-box {
+    display: flex; align-items: center; gap: 8px; margin: 4px 0 20px;
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.3);
+    border-radius: 8px; padding: 10px 14px;
+  }
+  .topic-box code { flex: 1; font-size: 0.95rem; word-break: break-all; }
+  .topic-box button {
+    flex-shrink: 0; border: none; border-radius: 6px; padding: 8px 12px;
+    background: #ef3e42; color: #fff; font-weight: 600; cursor: pointer; font-size: 0.85rem;
+  }
+  .topic-box button:hover { background: #ff5257; }
+  a.store-link {
+    display: inline-block; margin: 0 10px 10px 0; padding: 10px 16px;
+    border: 1px solid rgba(255,255,255,0.3); border-radius: 8px; color: #fff;
+    text-decoration: none; font-size: 0.9rem;
+  }
+  a.store-link:hover { background: rgba(255,255,255,0.1); }
+  a.web-link { color: #8ecbff; }
+  .fine { margin-top: 24px; font-size: 0.72rem; opacity: 0.6; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>⚾ Dodgers Win Alerts</h1>
+    <p class="sub">Get a push notification the moment the Dodgers win at home. Nothing else — no spam, no daily digests.</p>
+
+    <ol>
+      <li>Install the free <strong>ntfy</strong> app (or use the web link below).</li>
+      <li>Subscribe to this topic:</li>
+    </ol>
+
+    <div class="topic-box">
+      <code id="topic">ddbb-dodgers-panda-win</code>
+      <button id="copy-btn" type="button">Copy</button>
+    </div>
+
+    <div>
+      <a class="store-link" href="https://apps.apple.com/us/app/ntfy/id1625396347" target="_blank" rel="noopener">iPhone App</a>
+      <a class="store-link" href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" target="_blank" rel="noopener">Android App</a>
+      <a class="store-link web-link" href="https://ntfy.sh/ddbb-dodgers-panda-win" target="_blank" rel="noopener">Subscribe in browser instead</a>
+    </div>
+
+    <p class="fine">
+      Alerts are sent via <a class="web-link" href="https://ntfy.sh" target="_blank" rel="noopener">ntfy.sh</a>, a free open-source push notification service —
+      no account or phone number required. Anyone who knows this topic name can subscribe (or unsubscribe from inside the app anytime).
+    </p>
+  </div>
+
+  <script>
+    const btn = document.getElementById("copy-btn");
+    const topic = document.getElementById("topic").textContent;
+    btn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(topic);
+        btn.textContent = "Copied!";
+      } catch {
+        btn.textContent = "Select & copy manually";
+      }
+      setTimeout(() => (btn.textContent = "Copy"), 2000);
+    });
+  </script>
+</body>
+</html>

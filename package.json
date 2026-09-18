@@ -1,0 +1,21 @@
+{
+  "name": "dodgers-sms-alerts",
+  "version": "1.0.0",
+  "description": "Push-notifies subscribers whenever the LA Dodgers win a home game, using ntfy.sh and the free MLB Stats API.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node test-jobs.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "node-cron": "^3.0.3"
+  }
+}
