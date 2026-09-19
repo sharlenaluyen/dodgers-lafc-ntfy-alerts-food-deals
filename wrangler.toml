@@ -26,10 +26,18 @@ crons = [
 MLB_TEAM_ID = "119"
 HOME_VENUE_MATCH = "dodger stadium"
 NTFY_TOPIC = "ddbb-dodgers-panda-win"
-NTFY_SERVER = "https://ntfy.sh"
+# Self-hosted ntfy instance (Google Cloud Run, free tier) — the public
+# ntfy.sh server's free-tier rate limiting is IP-based and shared across
+# every Cloudflare Worker's egress IPs, which routinely exhausted our daily
+# quota from unrelated traffic. Self-hosting avoids that entirely. See
+# https://github.com/binwiederhier/ntfy/issues/1963 for the writeup.
+NTFY_SERVER = "https://dodgers-ntfy-646055455476.us-west1.run.app"
 
-# ADMIN_SECRET is a secret, not a var — set it with:
+# ADMIN_SECRET and NTFY_TOKEN are secrets, not vars — set them with:
 #   npx wrangler secret put ADMIN_SECRET
+#   npx wrangler secret put NTFY_TOKEN   (not needed for the self-hosted
+#     server above, which has no auth by default — only relevant if you
+#     switch back to the public ntfy.sh)
 
 [[kv_namespaces]]
 binding = "DODGERS_KV"

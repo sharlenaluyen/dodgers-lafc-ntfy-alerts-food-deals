@@ -1,12 +1,12 @@
 # Dodgers Win Alerts
 
-Sends a push notification when the LA Dodgers win **at home** (Dodger Stadium): once right away, and again the next morning. Runs as a **Cloudflare Worker** on Cron Triggers (free, persistent, no server to keep running), publishes through [ntfy.sh](https://ntfy.sh) (free, open-source push; no account, no per-subscriber cost), and reads scores from the free MLB Stats API (no API key needed).
+Sends a push notification when the LA Dodgers win **at home** (Dodger Stadium): once right away, and again the next morning. Runs as a **Cloudflare Worker** on Cron Triggers (free, persistent, no server to keep running), publishes through a **self-hosted ntfy instance on Google Cloud Run** (free tier, open-source push — no account, no per-subscriber cost), and reads scores from the free MLB Stats API (no API key needed).
 
 Away wins/losses are silently ignored.
 
 ## How it works
 
-There's no subscriber database and no always-on server. Cloudflare's Cron Triggers call this Worker on a schedule; each run makes a couple of outbound HTTP calls and exits. Everyone subscribes directly to one shared **ntfy topic** (ddbb-dodgers-panda-win), and the Worker just publishes to it once, and ntfy send out a notification to subscribers.
+There's no subscriber database and no always-on server for the checking/scheduling side. Cloudflare's Cron Triggers call this Worker on a schedule; each run makes a couple of outbound HTTP calls and exits. Everyone subscribes directly to one shared **ntfy topic** (`ddbb-dodgers-panda-win`) on our own ntfy server, and the Worker just publishes to it once — ntfy sends the notification out to everyone subscribed.
 
 There's also no game-history database. A tiny flag per game in **Workers KV** (Cloudflare's key-value store) is all that prevents a game from being announced twice. It expires on its own after 2 days, so nothing is kept around longer than that.
 
@@ -17,7 +17,13 @@ There's also no game-history database. A tiny flag per game in **Workers KV** (C
 - **`src/mlb.js`** — polls `statsapi.mlb.com` (free, keyless) for the Dodgers' games in the last ~24h, and flags whether each finished game was (a) a win and (b) actually played at Dodger Stadium — see "How home games are detected" below.
 - **`src/ntfy.js`** — publishes a message to the ntfy topic via a single HTTP POST.
 - **`test.js`** — `npm test` runs a mocked pass (a home win, an away win, a home loss, and a second home win the same run) with fake KV storage and no real network calls, and checks: only home wins publish, the morning recap bundles multiple wins into one message, and both jobs are safe to re-run without double-publishing.
-- **`wrangler.toml`** — Worker config: the Cron Trigger schedule, non-secret vars, and the KV namespace binding.
+- **`wrangler.toml`** — Worker config: the Cron Trigger schedule, non-secret vars (including the ntfy server URL), and the KV namespace binding.
+
+### Why ntfy is self-hosted instead of using the public ntfy.sh
+
+The public `ntfy.sh` server's free tier rate-limits by **IP address**, not by account — even an authenticated free account still shares that IP-based bucket (only paid ntfy tiers get their own dedicated quota). Since this Worker's outbound requests egress from Cloudflare's shared IP pool — used by countless other unrelated Workers also publishing to ntfy.sh — our tiny 1-2-messages-a-day usage routinely got caught in a `429 daily quota reached` triggered by *other people's* traffic, silently dropping real notifications. Full writeup: [ntfy issue #1963](https://github.com/binwiederhier/ntfy/issues/1963).
+
+The fix was self-hosting a dedicated ntfy instance ([Google Cloud Run](https://cloud.google.com/run), free tier — 2M requests/month, far more than this needs) so our traffic isn't sharing anyone else's quota. See "Self-hosting ntfy" below for how it's deployed.
 
 ### How home games are detected
 
@@ -29,7 +35,7 @@ Checking every 15 minutes, 24/7, all season would burn through free-tier budgets
 
 ## 1. Pick a topic name
 
-Anyone who knows the ntfy topic name can subscribe to it (or, on the public `ntfy.sh` server, publish to it too) — there's no per-subscriber auth. Treat it like a shared secret: long and unguessable. This app defaults to:
+Anyone who knows the ntfy topic name (and our server address) can subscribe to it — there's no per-subscriber auth. Treat the topic name like a shared secret: long and unguessable. This app defaults to:
 
 ```
 NTFY_TOPIC = "ddbb-dodgers-panda-win"
@@ -37,7 +43,44 @@ NTFY_TOPIC = "ddbb-dodgers-panda-win"
 
 set in `wrangler.toml`'s `[vars]`. Change it there if you want your own.
 
-## 2. Set up
+## 2. Self-hosting ntfy (Google Cloud Run)
+
+This only needs to be done once. It's deployed as:
+
+```bash
+gcloud auth login
+gcloud projects create YOUR_PROJECT_ID --name="Dodgers ntfy"
+# Attach a billing account to the project in the Cloud Console — required by
+# Cloud Run even though usage stays within the free tier:
+#   https://console.cloud.google.com/billing/linkedaccount?project=YOUR_PROJECT_ID
+gcloud services enable run.googleapis.com --project=YOUR_PROJECT_ID
+
+# First deploy (no base-url yet, since we don't know the assigned URL until after this):
+gcloud run deploy dodgers-ntfy \
+  --image=docker.io/binwiederhier/ntfy:latest \
+  --region=us-west1 --platform=managed --allow-unauthenticated \
+  --port=80 --args=serve --min-instances=0 --max-instances=1 \
+  --project=YOUR_PROJECT_ID
+# Note the printed Service URL, then redeploy with base-url/upstream-base-url set
+# (ntfy requires base-url whenever upstream-base-url is set; upstream-base-url
+# relays the "wake up and check" signal for iOS push through ntfy.sh's own
+# Firebase/APNs setup — Apple doesn't allow a persistent background connection
+# the way Android does, so even self-hosted instances need this for iOS):
+gcloud run deploy dodgers-ntfy \
+  --image=docker.io/binwiederhier/ntfy:latest \
+  --region=us-west1 --platform=managed --allow-unauthenticated \
+  --port=80 --args=serve --min-instances=0 --max-instances=1 \
+  --set-env-vars="NTFY_BASE_URL=<the Service URL from above>,NTFY_UPSTREAM_BASE_URL=https://ntfy.sh" \
+  --project=YOUR_PROJECT_ID
+```
+
+Then set `NTFY_SERVER` in `wrangler.toml`'s `[vars]` to that Service URL.
+
+Cloud Run's free tier (2M requests/month) covers this easily — a tiny cron-triggered app publishing at most a couple of messages a day. `min-instances=0` means it scales to zero and cold-starts on the next request, which just means a brief delay before a notification relays; fine for this use case.
+
+**A gotcha to know about if you redeploy:** `gcloud run deploy` without `--set-env-vars` reuses the *previous* revision's env vars rather than clearing them — pass `--clear-env-vars` explicitly if you want a clean slate.
+
+## 3. Set up the Worker
 
 ```bash
 cd dodgers-sms-alerts
@@ -75,7 +118,7 @@ Run it locally against real Cloudflare infra (KV included) before deploying:
 npm run dev
 ```
 
-## 3. Deploy
+## 4. Deploy the Worker
 
 ```bash
 npm run deploy
@@ -83,31 +126,29 @@ npm run deploy
 
 That registers the Worker and its Cron Triggers with Cloudflare — no server to host, nothing to keep running yourself. To redeploy after a change, just run it again (or connect the repo in the Cloudflare dashboard under **Workers & Pages → your Worker → Settings → Builds** for git-push-to-deploy).
 
-## 4. Subscribe to alerts
+## 5. Subscribe to alerts
 
-1. Install the free **ntfy** app: [iOS](https://apps.apple.com/us/app/ntfy/id1625396347) / [Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy) — or subscribe straight from a browser at `https://ntfy.sh/<your-topic>` (no app install needed).
-2. In the app, tap **+** and enter your topic name (e.g. `ddbb-dodgers-panda-win`).
-3. That's it — no phone number, no signup form, no account.
+1. Install the free **ntfy** app: [iOS](https://apps.apple.com/us/app/ntfy/id1625396347) / [Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy).
+2. Tap **+**, then **"Use a different server"** and enter our server's URL (the same one set in `NTFY_SERVER`) — this is the one extra step versus using the public ntfy.sh, since we're on our own instance.
+3. Enter the topic name (e.g. `ddbb-dodgers-panda-win`).
+4. That's it — no phone number, no signup form, no account. You can also subscribe straight from a browser at `<your-server-url>/<topic>`, no app install needed.
 
-`public/index.html` is a static page with the topic name, app-store links, and the browser-subscribe link — host it wherever you like (e.g. Cloudflare Pages on a domain you already own) and share that link with people you want subscribed. It's independent of the Worker; nothing here serves it automatically.
+`public/index.html` is a static page with the server URL, topic name, app-store links, and the browser-subscribe link, with copy buttons for both — host it wherever you like (e.g. Cloudflare Pages on a domain you already own) and share that link with people you want subscribed. It's independent of the Worker; nothing here serves it automatically.
 
 To unsubscribe, delete the topic from inside the ntfy app at any time.
 
-## 5. Test it
+## 6. Test it
 
 - **Send a one-off test notification** (doesn't touch any real game data):
   ```bash
   curl "https://your-worker.your-subdomain.workers.dev/test-notify?secret=YOUR_ADMIN_SECRET"
   ```
-- **Confirm delivery directly against ntfy**, without the Worker at all:
+- **Confirm delivery directly against your ntfy server**, without the Worker at all:
   ```bash
-  curl -d "Test message" https://ntfy.sh/YOUR_TOPIC
+  curl -d "Test message" https://your-ntfy-server.run.app/YOUR_TOPIC
   ```
 - **Check the Cron Trigger fired**: Cloudflare dashboard → your Worker → **Logs**, or `npx wrangler tail`.
-
-## If you'd rather not depend on the public ntfy.sh
-
-ntfy is open-source and self-hostable — run your own [ntfy server](https://docs.ntfy.sh/install/) (a single small Docker container somewhere) and point `NTFY_SERVER` in `wrangler.toml` at it instead of `https://ntfy.sh`. Subscribers then point their app at your server instead of the public one.
+- **Check the ntfy server's own logs**: `gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="dodgers-ntfy"' --project=YOUR_PROJECT_ID`.
 
 ## Customizing
 
@@ -118,5 +159,5 @@ ntfy is open-source and self-hostable — run your own [ntfy server](https://doc
 
 ## Privacy notes
 
-- The public `ntfy.sh` server is free and requires no account, but messages pass through their infrastructure (retained ~12h, then deleted) and their iOS/Android apps deliver via Firebase Cloud Messaging (Google's push infrastructure), like virtually all mobile push notifications do. See [ntfy's privacy policy](https://docs.ntfy.sh/privacy/) for details, or self-host (see above) to avoid both.
-- The topic name is the *only* access control — anyone who has it can subscribe, and on the public server, anyone who has it can publish to it too. Keep it unguessable rather than sharing it publicly if that matters to you.
+- Since ntfy is self-hosted here, messages never touch the public `ntfy.sh` infrastructure except for the lightweight iOS "wake up and check" relay signal (`NTFY_UPSTREAM_BASE_URL`) — the actual message content is served from our own Cloud Run instance. See [ntfy's privacy policy](https://docs.ntfy.sh/privacy/) for what that relay involves.
+- The topic name (plus knowing our server address) is the *only* access control — anyone who has both can subscribe, and since `--allow-unauthenticated` is set, anyone who has both can publish to it too. Keep the topic name unguessable rather than sharing it publicly if that matters to you.

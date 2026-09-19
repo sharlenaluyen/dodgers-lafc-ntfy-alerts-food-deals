@@ -49,38 +49,51 @@
 
     <ol>
       <li>Install the free <strong>ntfy</strong> app (or use the web link below).</li>
-      <li>Subscribe to this topic:</li>
+      <li>Tap <strong>+</strong>, then <strong>"Use a different server"</strong> and enter this server address:</li>
+    </ol>
+
+    <div class="topic-box">
+      <code id="server">https://dodgers-ntfy-646055455476.us-west1.run.app</code>
+      <button id="copy-server-btn" type="button">Copy</button>
+    </div>
+
+    <ol start="3">
+      <li>Then enter this topic name:</li>
     </ol>
 
     <div class="topic-box">
       <code id="topic">ddbb-dodgers-panda-win</code>
-      <button id="copy-btn" type="button">Copy</button>
+      <button id="copy-topic-btn" type="button">Copy</button>
     </div>
 
     <div>
       <a class="store-link" href="https://apps.apple.com/us/app/ntfy/id1625396347" target="_blank" rel="noopener">iPhone App</a>
       <a class="store-link" href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" target="_blank" rel="noopener">Android App</a>
-      <a class="store-link web-link" href="https://ntfy.sh/ddbb-dodgers-panda-win" target="_blank" rel="noopener">Subscribe in browser instead</a>
+      <a class="store-link web-link" href="https://dodgers-ntfy-646055455476.us-west1.run.app/ddbb-dodgers-panda-win" target="_blank" rel="noopener">Subscribe in browser instead</a>
     </div>
 
     <p class="fine">
-      Alerts are sent via <a class="web-link" href="https://ntfy.sh" target="_blank" rel="noopener">ntfy.sh</a>, a free open-source push notification service —
-      no account or phone number required. Anyone who knows this topic name can subscribe (or unsubscribe from inside the app anytime).
+      Alerts are sent via a self-hosted <a class="web-link" href="https://ntfy.sh" target="_blank" rel="noopener">ntfy</a> instance —
+      no account or phone number required. Anyone who knows this server + topic can subscribe (or unsubscribe from inside the app anytime).
     </p>
   </div>
 
   <script>
-    const btn = document.getElementById("copy-btn");
-    const topic = document.getElementById("topic").textContent;
-    btn.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(topic);
-        btn.textContent = "Copied!";
-      } catch {
-        btn.textContent = "Select & copy manually";
-      }
-      setTimeout(() => (btn.textContent = "Copy"), 2000);
-    });
+    function wireCopyButton(btnId, valueId) {
+      const btn = document.getElementById(btnId);
+      const value = document.getElementById(valueId).textContent;
+      btn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(value);
+          btn.textContent = "Copied!";
+        } catch {
+          btn.textContent = "Select & copy manually";
+        }
+        setTimeout(() => (btn.textContent = "Copy"), 2000);
+      });
+    }
+    wireCopyButton("copy-server-btn", "server");
+    wireCopyButton("copy-topic-btn", "topic");
   </script>
 </body>
 </html>
