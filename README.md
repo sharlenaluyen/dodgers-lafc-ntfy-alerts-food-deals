@@ -80,6 +80,8 @@ Cloud Run's free tier (2M requests/month) covers this easily — a tiny cron-tri
 
 **A gotcha to know about if you redeploy:** `gcloud run deploy` without `--set-env-vars` reuses the *previous* revision's env vars rather than clearing them — pass `--clear-env-vars` explicitly if you want a clean slate.
 
+**A gotcha to know about the billing account:** a brand-new Google Cloud account gets a one-time 90-day, $300 Free Trial — separate from, and shorter than, Cloud Run's *permanent* free tier used above. When the trial ends, Google auto-*stops* every resource on that billing account (not just starts charging) unless you've clicked **Upgrade** on it first, at [console.cloud.google.com/billing](https://console.cloud.google.com/billing). Upgrading doesn't cost anything for a workload this small — it only removes the trial's hard cutoff, since Cloud Run's own free allowance still applies afterward regardless of trial status.
+
 ## 3. Set up the Worker
 
 ```bash

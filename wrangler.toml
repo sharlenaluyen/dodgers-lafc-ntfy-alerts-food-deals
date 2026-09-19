@@ -33,11 +33,8 @@ NTFY_TOPIC = "ddbb-dodgers-panda-win"
 # https://github.com/binwiederhier/ntfy/issues/1963 for the writeup.
 NTFY_SERVER = "https://dodgers-ntfy-646055455476.us-west1.run.app"
 
-# ADMIN_SECRET and NTFY_TOKEN are secrets, not vars — set them with:
+# ADMIN_SECRET is a secret, not a var — set it with:
 #   npx wrangler secret put ADMIN_SECRET
-#   npx wrangler secret put NTFY_TOKEN   (not needed for the self-hosted
-#     server above, which has no auth by default — only relevant if you
-#     switch back to the public ntfy.sh)
 
 [[kv_namespaces]]
 binding = "DODGERS_KV"
