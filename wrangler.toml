@@ -34,3 +34,8 @@ NTFY_SERVER = "https://ntfy.sh"
 [[kv_namespaces]]
 binding = "DODGERS_KV"
 id = "bafb15bc26b5467bad335dbc66550b32"
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+persist = true
