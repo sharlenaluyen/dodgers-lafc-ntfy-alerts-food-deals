@@ -45,15 +45,17 @@ Checking every 15 minutes, 24/7, all season would burn through free-tier budgets
 
 ## 1. Pick a topic name
 
-Anyone who knows the ntfy topic name (and our server address) can subscribe to it — there's no per-subscriber auth. Treat each topic name like a shared secret: long and unguessable. This app defaults to:
+Anyone who knows the ntfy topic name (and our server address) can subscribe to it — there's no per-subscriber auth. Each alert type publishes to **two** topics: a private one (long and unguessable, meant to be shared quietly with friends/family) and a public one (meant to be shared widely, e.g. via `public/index.html`). Treat the private ones like a shared secret. This app defaults to:
 
 ```
-NTFY_TOPIC       = "public-dodgers-panda-win"   # Dodgers/Panda alerts
-NTFY_TOPIC_LAFC  = "public-lafc-ono-win"        # LAFC/Ono alerts
-NTFY_OPS_TOPIC   = "ddpublicbb-lafc-ono-ops"        # your own — LAFC integration failure alerts
+NTFY_TOPIC              = "[PRIVATE]-dodgers-panda-win"    # Dodgers/Panda — private
+NTFY_TOPIC_PUBLIC       = "public-dodgers-panda-win"  # Dodgers/Panda — public
+NTFY_TOPIC_LAFC         = "[PRIVATE]-lafc-ono-win"         # LAFC/Ono — private
+NTFY_TOPIC_LAFC_PUBLIC  = "public-lafc-ono-win"       # LAFC/Ono — public
+NTFY_OPS_TOPIC          = "[PRIVATE[]]-lafc-ono-ops"         # your own — LAFC integration failure alerts
 ```
 
-set in `wrangler.toml`'s `[vars]`. Change any of them if you want your own. `NTFY_OPS_TOPIC` isn't meant to be shared with promo subscribers — it's where you'll hear about it if ESPN's unofficial API breaks (see "Why LAFC needed error-shape handling that MLB didn't" above).
+set in `wrangler.toml`'s `[vars]`. Change any of them if you want your own — or drop a `_PUBLIC` var entirely if you only want the private topic for that alert type. `NTFY_OPS_TOPIC` isn't meant to be shared with promo subscribers — it's where you'll hear about it if ESPN's unofficial API breaks (see "Why LAFC needed error-shape handling that MLB didn't" above).
 
 ## 2. Self-hosting ntfy (Google Cloud Run)
 
@@ -147,7 +149,7 @@ That registers the Worker and its Cron Triggers with Cloudflare — no server to
 3. Enter the topic name — `public-dodgers-panda-win` for Dodgers alerts, `public-lafc-ono-win` for LAFC alerts (or your own values from `wrangler.toml`). Subscribe to both if you want both.
 4. That's it — no phone number, no signup form, no account. You can also subscribe straight from a browser at `<your-server-url>/<topic>`, no app install needed.
 
-If you're running the LAFC integration, also subscribe yourself (only yourself — don't share this one) to `NTFY_OPS_TOPIC` (`public-lafc-ono-ops` by default) so you hear about it if ESPN's API breaks.
+If you're running the LAFC integration, also subscribe yourself (only yourself — don't share this one) to `NTFY_OPS_TOPIC` (`[PRIVATE]-lafc-ono-ops` by default) so you hear about it if ESPN's API breaks.
 
 `public/index.html` is a static page with the server URL, topic name, app-store links, and the browser-subscribe link, with copy buttons for both — host it wherever you like (e.g. Cloudflare Pages on a domain you already own) and share that link with people you want subscribed. It's independent of the Worker; nothing here serves it automatically. It currently only advertises the Dodgers topic — duplicate/edit it if you want a public page for the LAFC topic too.
 
