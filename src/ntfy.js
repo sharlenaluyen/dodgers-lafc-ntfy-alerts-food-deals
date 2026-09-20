@@ -11,17 +11,21 @@
 
 export async function publish(env, message, { title } = {}) {
   const server = env.NTFY_SERVER || "https://ntfy.sh";
-  const topic = env.NTFY_TOPIC || "ddbb-dodgers-panda-win";
+  const topics = [env.NTFY_TOPIC || "ddbb-dodgers-panda-win", env.NTFY_TOPIC_PUBLIC].filter(Boolean);
 
-  const res = await fetch(server, {
-    method: "POST",
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-    body: JSON.stringify({ topic, message, title }),
-  });
+  return Promise.all(
+    topics.map(async (topic) => {
+      const res = await fetch(server, {
+        method: "POST",
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify({ topic, message, title }),
+      });
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`ntfy publish failed: ${res.status} ${res.statusText} ${body}`);
-  }
-  return res.json();
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(`ntfy publish failed (topic=${topic}): ${res.status} ${res.statusText} ${body}`);
+      }
+      return res.json();
+    })
+  );
 }

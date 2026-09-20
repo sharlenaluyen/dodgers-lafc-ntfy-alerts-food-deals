@@ -26,6 +26,9 @@ crons = [
 MLB_TEAM_ID = "119"
 HOME_VENUE_MATCH = "dodger stadium"
 NTFY_TOPIC = "ddbb-dodgers-panda-win"
+# Public mirror of the same alerts — anyone can subscribe, unlike the topic
+# above which is shared privately with friends/family.
+NTFY_TOPIC_PUBLIC = "public-dodgers-panda-win"
 # Self-hosted ntfy instance (Google Cloud Run, free tier) — the public
 # ntfy.sh server's free-tier rate limiting is IP-based and shared across
 # every Cloudflare Worker's egress IPs, which routinely exhausted our daily
