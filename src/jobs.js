@@ -31,7 +31,7 @@ export async function checkAndNotify(env, deps) {
     const key = `notified:${win.gamePk}`;
     if (await alreadyFlagged(env, key)) continue; // already published this one
 
-    await publish(env, `The Dodgers WIN at home! Final: ${win.summary}. Go Blue!`, {
+    await publish(env, `The Dodgers WIN at home! Final: ${win.summary}. Go Blue! Use code "DODGERSWIN" on the app for $7 Panda Plate.`, {
       title: "⚾ Dodgers Win!",
     });
     await setFlag(env, key);
@@ -59,8 +59,8 @@ export async function sendMorningRecap(env, deps) {
   const summaries = pending.map((g) => `beat the ${g.opponent} ${g.dodgersScore}-${g.opponentScore}`);
   const text =
     summaries.length === 1
-      ? `Morning reminder: the Dodgers ${summaries[0]} at home last night! Go Blue!`
-      : `Morning recap: the Dodgers ${summaries.join(", and ")} at home! Go Blue!`;
+      ? `Morning reminder: the Dodgers ${summaries[0]} at home last night! Go Blue! Use code "DODGERSWIN" on the app for $7 Panda Plate.`
+      : `Morning recap: the Dodgers ${summaries.join(", and ")} at home! Go Blue! Use code "DODGERSWIN" on the app for $7 Panda Plate.`;
 
   await publish(env, text, { title: "☀️ Dodgers Morning Recap" });
 
