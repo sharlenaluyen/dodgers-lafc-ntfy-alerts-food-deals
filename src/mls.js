@@ -10,6 +10,12 @@
 // of "fetch" (the request itself failed) or "schema" (ESPN responded, but
 // the JSON didn't look like what this code expects) so jobs.js can turn
 // either into a one-time ops alert instead of silently going dark.
+//
+// The optional `skip(eventId)` param lets the caller (jobs.js) short-circuit
+// before the extra per-event summary fetch below for games it's already
+// fully handled — otherwise a finished home game gets re-fetched on every
+// 15-minute cron tick for the rest of its ~24h lookback window, for no
+// benefit once it's already been acted on.
 
 const ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer/usa.1";
 
@@ -69,7 +75,7 @@ function scoredFirstInFirstHalf(summary, teamId) {
   return first.team.id === teamId && first.period.number === 1;
 }
 
-export async function getRecentFinishedHomeGames(env) {
+export async function getRecentFinishedHomeGames(env, { skip } = {}) {
   const teamId = String(env.ESPN_LAFC_TEAM_ID || "18966");
   const now = new Date();
   const lookbackMs = 24 * 60 * 60 * 1000;
@@ -102,6 +108,8 @@ export async function getRecentFinishedHomeGames(env) {
 
     const isHomeGame = lafc.homeAway === "home" && comp.neutralSite !== true;
     if (!isHomeGame) continue; // away/neutral-site — promo requires a home match
+
+    if (skip && (await skip(event.id))) continue; // caller already handled this one — skip the extra summary fetch
 
     const summary = await fetchJson(`${ESPN_BASE}/summary?event=${event.id}`, `ESPN summary (event ${event.id})`);
     const scoredFirst = scoredFirstInFirstHalf(summary, teamId);

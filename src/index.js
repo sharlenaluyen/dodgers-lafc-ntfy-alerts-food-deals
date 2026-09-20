@@ -1,37 +1,29 @@
 // src/index.js
 // Cloudflare Worker entry point. Two Cron Triggers call this on a schedule
-// (see wrangler.toml): a frequent check during the part of the day Dodgers
-// (and, as it turns out, LAFC) games are realistically being played, and a
-// once-daily morning recap. Both the Dodgers/Panda and LAFC/Ono jobs share
-// this same schedule — MLS kickoff times fall inside the existing window,
-// so no extra Cron Triggers were needed. There's also a manual /test-notify
-// route for verifying the ntfy path works without waiting for a real game.
+// (see wrangler.toml): a frequent check during the part of the day games
+// are realistically being played, and a once-daily morning recap. Every
+// integration in src/integrations.js shares this same schedule — kickoff
+// times fall inside the existing window, so no extra Cron Triggers were
+// needed. There's also a manual /test-notify route for verifying the ntfy
+// path works without waiting for a real game.
 
-import { getRecentFinishedGames } from "./mlb.js";
-import { getRecentFinishedHomeGames } from "./mls.js";
 import { publish, dodgersTopics } from "./ntfy.js";
-import { checkAndNotify, sendMorningRecap, checkAndNotifyLAFC, sendMorningRecapLAFC } from "./jobs.js";
+import { checkAndNotify, sendMorningRecap } from "./jobs.js";
+import { INTEGRATIONS } from "./integrations.js";
 
-const deps = { getRecentFinishedGames, getRecentFinishedHomeGames, publish };
+const deps = { publish };
 
 // Must match the once-daily recap trigger in wrangler.toml exactly, so we
 // know which of the (several) cron schedules just fired.
 const MORNING_CRON = "0 15 * * *";
 
-// One entry per sport/promo integration — add a row here when a new one is
-// added rather than editing scheduled() itself.
-const INTEGRATIONS = [
-  { check: checkAndNotify, recap: sendMorningRecap },
-  { check: checkAndNotifyLAFC, recap: sendMorningRecapLAFC },
-];
-
 export default {
   async scheduled(event, env, ctx) {
-    const isMorning = event.cron === MORNING_CRON;
-    const jobs = INTEGRATIONS.map((i) => (isMorning ? i.recap : i.check)(env, deps));
+    const run = event.cron === MORNING_CRON ? sendMorningRecap : checkAndNotify;
+    const jobs = INTEGRATIONS.map((integration) => run(env, deps, integration));
 
-    // allSettled, not all — a broken LAFC/ESPN integration shouldn't take
-    // down the Dodgers/Panda alerts, or vice versa.
+    // allSettled, not all — a broken integration (e.g. LAFC/ESPN) shouldn't
+    // take down the others.
     ctx.waitUntil(
       Promise.allSettled(jobs).then((results) => {
         for (const r of results) {
@@ -48,10 +40,10 @@ export default {
       if (!env.ADMIN_SECRET || url.searchParams.get("secret") !== env.ADMIN_SECRET) {
         return new Response("forbidden", { status: 403 });
       }
-      const target = url.searchParams.get("target"); // "lafc" | "ops" | omitted (default: Dodgers)
-      const topicByTarget = { lafc: env.NTFY_TOPIC_LAFC, ops: env.NTFY_OPS_TOPIC };
-      const topics = target ? [topicByTarget[target]] : dodgersTopics(env);
-      if (target && !topics[0]) {
+      const target = url.searchParams.get("target"); // an integration id (e.g. "lafc"), "ops", or omitted (default: Dodgers)
+      const integration = INTEGRATIONS.find((i) => i.id === target);
+      const topics = !target ? dodgersTopics(env) : target === "ops" ? [env.NTFY_OPS_TOPIC] : integration?.topics(env);
+      if (target && !(topics && topics[0])) {
         return new Response(`no topic configured for target=${target}`, { status: 400 });
       }
       try {

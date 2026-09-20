@@ -1,10 +1,8 @@
 // src/jobs.js
-// The check/recap job pairs for each integration (Dodgers/Panda, LAFC/Ono).
-// No database — just a tiny per-game flag in Workers KV so a game already
-// published isn't published again. Flags expire on their own after a
-// couple of days, so nothing is kept around.
-
-import { dodgersTopics, lafcTopics } from "./ntfy.js";
+// Generic check/recap job runners shared by every integration in
+// src/integrations.js. No database — just a tiny per-game flag in Workers
+// KV so a game already published isn't published again. Flags expire on
+// their own after a couple of days, so nothing is kept around.
 
 const FLAG_TTL_SECONDS = 60 * 60 * 24 * 2; // 2 days — comfortably longer than the 24h lookback
 
@@ -14,6 +12,10 @@ async function alreadyFlagged(env, key) {
 
 async function setFlag(env, key) {
   await env.DODGERS_KV.put(key, "1", { expirationTtl: FLAG_TTL_SECONDS });
+}
+
+function keyFor(prefix, id) {
+  return `${prefix}:${id}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -39,135 +41,65 @@ async function alertOps(env, deps, kind, message) {
 }
 
 // ---------------------------------------------------------------------------
-// Shared shape behind every check/recap pair below: fetch games from the
-// source, optionally routing a fetch failure to an ops alert (`opsLabel`)
-// instead of letting it propagate, then filter down to the ones that matter.
+// Fetch an integration's games, filtered down to hits. `keyPrefix` is which
+// KV namespace ("already handled") applies to this call — passed through as
+// a `skip(id)` check the fetcher can use to avoid extra per-game fetches for
+// games it doesn't need to re-fetch (e.g. mls.js's per-event summary call).
+// It's purely an optimization: fetchers that ignore it just return everything,
+// and the alreadyFlagged() checks below still guarantee no double-publish.
 // Returns null if the fetch failed and was already routed to an ops alert.
 // ---------------------------------------------------------------------------
-async function fetchHits(env, deps, { getGames, filterHits, opsLabel, actionLabel }) {
-  let games;
-  if (!opsLabel) {
-    games = await getGames(env);
-  } else {
-    try {
-      games = await getGames(env);
-    } catch (err) {
-      const kind = err.kind || "unknown";
-      await alertOps(env, deps, `${opsLabel}-${kind}`, `${actionLabel} failed (${kind}): ${err.message}`);
-      return null;
-    }
+async function fetchHits(env, deps, integration, keyPrefix) {
+  try {
+    const games = await integration.getGames(env, { skip: (id) => alreadyFlagged(env, keyFor(keyPrefix, id)) });
+    return games.filter(integration.filterHits);
+  } catch (err) {
+    if (!integration.opsLabel) throw err;
+    const kind = err.kind || "unknown";
+    await alertOps(env, deps, `${integration.opsLabel}-${kind}`, `${integration.id} check failed (${kind}): ${err.message}`);
+    return null;
   }
-  return games.filter(filterHits);
 }
 
-// Publish immediately for every unflagged hit, then flag it.
-async function notifyOnce(env, deps, hits, { keyOf, buildMessage, publishOpts }) {
+// ---------------------------------------------------------------------------
+// Check for a finished, qualifying game and publish immediately. Games that
+// don't qualify are simply skipped — nothing is published for them, and
+// nothing needs to be recorded either, since we ask "does this qualify"
+// fresh each run.
+// ---------------------------------------------------------------------------
+export async function checkAndNotify(env, deps, integration) {
+  const hits = await fetchHits(env, deps, integration, integration.checkKeyPrefix);
+  if (hits === null) return; // fetch failed; already routed to an ops alert
+
   for (const hit of hits) {
-    const key = keyOf(hit);
+    const key = keyFor(integration.checkKeyPrefix, integration.idOf(hit));
     if (await alreadyFlagged(env, key)) continue; // already published this one
 
-    await deps.publish(env, buildMessage(hit), publishOpts);
+    await deps.publish(env, integration.buildMessage(hit), { title: integration.checkTitle, topics: integration.topics(env) });
     await setFlag(env, key);
   }
 }
 
-// Bundle every unflagged hit into one recap message, then flag them all.
-async function sendRecap(env, deps, hits, { keyOf, buildSummary, buildText, publishOpts }) {
+// ---------------------------------------------------------------------------
+// Once-daily morning recap: bundles every qualifying game in the lookback
+// window that hasn't had its recap sent yet into one message (so a
+// doubleheader sweep is one text, not two).
+// ---------------------------------------------------------------------------
+export async function sendMorningRecap(env, deps, integration) {
+  const hits = await fetchHits(env, deps, integration, integration.recapKeyPrefix);
+  if (hits === null) return; // fetch failed; already routed to an ops alert
+
   const pending = [];
   for (const hit of hits) {
-    if (!(await alreadyFlagged(env, keyOf(hit)))) pending.push(hit);
+    const key = keyFor(integration.recapKeyPrefix, integration.idOf(hit));
+    if (!(await alreadyFlagged(env, key))) pending.push(hit);
   }
   if (pending.length === 0) return;
 
-  await deps.publish(env, buildText(pending.map(buildSummary)), publishOpts);
+  const summaries = pending.map(integration.buildSummary);
+  await deps.publish(env, integration.buildRecapText(summaries), { title: integration.recapTitle, topics: integration.topics(env) });
 
   for (const hit of pending) {
-    await setFlag(env, keyOf(hit));
+    await setFlag(env, keyFor(integration.recapKeyPrefix, integration.idOf(hit)));
   }
-}
-
-// ---------------------------------------------------------------------------
-// Check for a finished Dodgers home win and publish immediately. Away wins
-// and any loss are simply skipped — nothing is published for them, and
-// nothing needs to be recorded either, since we only ever ask "did the
-// Dodgers just win at home" fresh each run.
-// ---------------------------------------------------------------------------
-export async function checkAndNotify(env, deps) {
-  const hits = await fetchHits(env, deps, {
-    getGames: deps.getRecentFinishedGames,
-    filterHits: (g) => g.isHomeGame && g.dodgersWon,
-  });
-
-  await notifyOnce(env, deps, hits, {
-    keyOf: (win) => `notified:${win.gamePk}`,
-    buildMessage: (win) =>
-      `The Dodgers WIN at home! Final: ${win.summary}. Go Blue! Use code "DODGERSWIN" on the app for $7 Panda Plate.`,
-    publishOpts: { title: "⚾ Dodgers Win!", topics: dodgersTopics(env) },
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Once-daily morning recap: bundles every home win in the lookback window
-// that hasn't had its recap sent yet into one message (so a doubleheader
-// sweep is one text, not two).
-// ---------------------------------------------------------------------------
-export async function sendMorningRecap(env, deps) {
-  const hits = await fetchHits(env, deps, {
-    getGames: deps.getRecentFinishedGames,
-    filterHits: (g) => g.isHomeGame && g.dodgersWon,
-  });
-
-  await sendRecap(env, deps, hits, {
-    keyOf: (win) => `recap:${win.gamePk}`,
-    buildSummary: (g) => `beat the ${g.opponent} ${g.dodgersScore}-${g.opponentScore}`,
-    buildText: (summaries) =>
-      summaries.length === 1
-        ? `Morning reminder: the Dodgers ${summaries[0]} at home last night! Go Blue! Use code "DODGERSWIN" on the app for $7 Panda Plate.`
-        : `Morning recap: the Dodgers ${summaries.join(", and ")} at home! Go Blue! Use code "DODGERSWIN" on the app for $7 Panda Plate.`,
-    publishOpts: { title: "☀️ Dodgers Morning Recap", topics: dodgersTopics(env) },
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Same shape as checkAndNotify()/sendMorningRecap() above, but for the Ono
-// Hawaiian BBQ "LAFCSCORES" promo: triggers when LAFC scores the match's
-// first goal in the first half of a home game (win/loss/draw don't matter).
-// Publishes to its own topic (NTFY_TOPIC_LAFC) so Dodgers/Panda subscribers
-// don't get LAFC alerts and vice versa.
-// ---------------------------------------------------------------------------
-export async function checkAndNotifyLAFC(env, deps) {
-  const hits = await fetchHits(env, deps, {
-    getGames: deps.getRecentFinishedHomeGames,
-    filterHits: (g) => g.scoredFirstInFirstHalf,
-    opsLabel: "lafc",
-    actionLabel: "LAFC check",
-  });
-  if (hits === null) return; // fetch failed; already routed to an ops alert
-
-  await notifyOnce(env, deps, hits, {
-    keyOf: (hit) => `lafc-notified:${hit.eventId}`,
-    buildMessage: (hit) =>
-      `LAFC scored first in the first half! Final: ${hit.summary}. Use code "LAFCSCORES" at Ono Hawaiian BBQ tomorrow for a $5.99 chicken plate.`,
-    publishOpts: { title: "⚽ LAFC Scores First!", topics: lafcTopics(env) },
-  });
-}
-
-export async function sendMorningRecapLAFC(env, deps) {
-  const hits = await fetchHits(env, deps, {
-    getGames: deps.getRecentFinishedHomeGames,
-    filterHits: (g) => g.scoredFirstInFirstHalf,
-    opsLabel: "lafc",
-    actionLabel: "LAFC recap",
-  });
-  if (hits === null) return; // fetch failed; already routed to an ops alert
-
-  await sendRecap(env, deps, hits, {
-    keyOf: (hit) => `lafc-recap:${hit.eventId}`,
-    buildSummary: (g) => `scored first against the ${g.opponent} (final: ${g.summary})`,
-    buildText: (summaries) =>
-      summaries.length === 1
-        ? `Morning reminder: LAFC ${summaries[0]} last night! Use code "LAFCSCORES" at Ono Hawaiian BBQ today for a $5.99 chicken plate.`
-        : `Morning recap: LAFC ${summaries.join(", and ")}! Use code "LAFCSCORES" at Ono Hawaiian BBQ today for a $5.99 chicken plate.`,
-    publishOpts: { title: "☀️ LAFC Morning Recap", topics: lafcTopics(env) },
-  });
 }
