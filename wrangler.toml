@@ -36,6 +36,17 @@ NTFY_TOPIC_PUBLIC = "public-dodgers-panda-win"
 # https://github.com/binwiederhier/ntfy/issues/1963 for the writeup.
 NTFY_SERVER = "https://dodgers-ntfy-646055455476.us-west1.run.app"
 
+# --- LAFC / Ono Hawaiian BBQ "LAFCSCORES" promo ---------------------------
+# ESPN's team id for LAFC in the soccer/usa.1 (MLS) API.
+ESPN_LAFC_TEAM_ID = "18966"
+# Separate topic so Dodgers/Panda subscribers don't get LAFC alerts and vice
+# versa. Same "long and unguessable" rule as NTFY_TOPIC above applies.
+NTFY_TOPIC_LAFC = "ddbb-lafc-ono-win"
+# Where src/jobs.js pages if the ESPN integration breaks (bad HTTP response,
+# or a JSON shape it no longer recognizes) — see alertOps() in src/jobs.js.
+# Subscribe to this one yourself; it's not meant for promo subscribers.
+NTFY_OPS_TOPIC = "ddbb-lafc-ono-ops"
+
 # ADMIN_SECRET is a secret, not a var — set it with:
 #   npx wrangler secret put ADMIN_SECRET
 
