@@ -6,7 +6,7 @@ Away wins/losses (Dodgers) and non-qualifying LAFC games are silently ignored.
 
 ## How it works
 
-There's no subscriber database and no always-on server for the checking/scheduling side. Cloudflare's Cron Triggers call this Worker on a schedule; each run makes a couple of outbound HTTP calls and exits. Everyone subscribes directly to a shared **ntfy topic** per alert type (`ddbb-dodgers-panda-win` for Dodgers, `ddbb-lafc-ono-win` for LAFC) on our own ntfy server, and the Worker just publishes to it once — ntfy sends the notification out to everyone subscribed to that topic.
+There's no subscriber database and no always-on server for the checking/scheduling side. Cloudflare's Cron Triggers call this Worker on a schedule; each run makes a couple of outbound HTTP calls and exits. Everyone subscribes directly to a shared **ntfy topic** per alert type (`public-dodgers-panda-win` for Dodgers, `public-lafc-ono-win` for LAFC) on our own ntfy server, and the Worker just publishes to it once — ntfy sends the notification out to everyone subscribed to that topic.
 
 There's also no game-history database. A tiny flag per game in **Workers KV** (Cloudflare's key-value store) is all that prevents a game from being announced twice. It expires on its own after 2 days, so nothing is kept around longer than that.
 
@@ -48,9 +48,9 @@ Checking every 15 minutes, 24/7, all season would burn through free-tier budgets
 Anyone who knows the ntfy topic name (and our server address) can subscribe to it — there's no per-subscriber auth. Treat each topic name like a shared secret: long and unguessable. This app defaults to:
 
 ```
-NTFY_TOPIC       = "ddbb-dodgers-panda-win"   # Dodgers/Panda alerts
-NTFY_TOPIC_LAFC  = "ddbb-lafc-ono-win"        # LAFC/Ono alerts
-NTFY_OPS_TOPIC   = "ddbb-lafc-ono-ops"        # your own — LAFC integration failure alerts
+NTFY_TOPIC       = "public-dodgers-panda-win"   # Dodgers/Panda alerts
+NTFY_TOPIC_LAFC  = "public-lafc-ono-win"        # LAFC/Ono alerts
+NTFY_OPS_TOPIC   = "ddpublicbb-lafc-ono-ops"        # your own — LAFC integration failure alerts
 ```
 
 set in `wrangler.toml`'s `[vars]`. Change any of them if you want your own. `NTFY_OPS_TOPIC` isn't meant to be shared with promo subscribers — it's where you'll hear about it if ESPN's unofficial API breaks (see "Why LAFC needed error-shape handling that MLB didn't" above).
@@ -144,10 +144,10 @@ That registers the Worker and its Cron Triggers with Cloudflare — no server to
 
 1. Install the free **ntfy** app: [iOS](https://apps.apple.com/us/app/ntfy/id1625396347) / [Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy).
 2. Tap **+**, then **"Use a different server"** and enter our server's URL (the same one set in `NTFY_SERVER`) — this is the one extra step versus using the public ntfy.sh, since we're on our own instance.
-3. Enter the topic name — `ddbb-dodgers-panda-win` for Dodgers alerts, `ddbb-lafc-ono-win` for LAFC alerts (or your own values from `wrangler.toml`). Subscribe to both if you want both.
+3. Enter the topic name — `public-dodgers-panda-win` for Dodgers alerts, `public-lafc-ono-win` for LAFC alerts (or your own values from `wrangler.toml`). Subscribe to both if you want both.
 4. That's it — no phone number, no signup form, no account. You can also subscribe straight from a browser at `<your-server-url>/<topic>`, no app install needed.
 
-If you're running the LAFC integration, also subscribe yourself (only yourself — don't share this one) to `NTFY_OPS_TOPIC` (`ddbb-lafc-ono-ops` by default) so you hear about it if ESPN's API breaks.
+If you're running the LAFC integration, also subscribe yourself (only yourself — don't share this one) to `NTFY_OPS_TOPIC` (`public-lafc-ono-ops` by default) so you hear about it if ESPN's API breaks.
 
 `public/index.html` is a static page with the server URL, topic name, app-store links, and the browser-subscribe link, with copy buttons for both — host it wherever you like (e.g. Cloudflare Pages on a domain you already own) and share that link with people you want subscribed. It's independent of the Worker; nothing here serves it automatically. It currently only advertises the Dodgers topic — duplicate/edit it if you want a public page for the LAFC topic too.
 
