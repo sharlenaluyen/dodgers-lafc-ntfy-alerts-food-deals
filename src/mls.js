@@ -25,10 +25,16 @@ function schemaError(message) {
   return err;
 }
 
+// ESPN's edge WAF 403s requests with no User-Agent or an unrecognized one
+// (including a normal app-identifying UA) — Cloudflare Workers' fetch()
+// sends no default UA, so every request was hitting that block. A curl UA
+// happens to be allowlisted; verified empirically against the live endpoint.
+const ESPN_USER_AGENT = "curl/8.4.0";
+
 async function fetchJson(url, label) {
   let res;
   try {
-    res = await fetch(url, { headers: { Accept: "application/json" } });
+    res = await fetch(url, { headers: { Accept: "application/json", "User-Agent": ESPN_USER_AGENT } });
   } catch (err) {
     throw fetchError(`${label}: network error: ${err.message}`);
   }

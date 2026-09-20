@@ -9,7 +9,7 @@
 
 import { getRecentFinishedGames } from "./mlb.js";
 import { getRecentFinishedHomeGames } from "./mls.js";
-import { publish } from "./ntfy.js";
+import { publish, dodgersTopics } from "./ntfy.js";
 import { checkAndNotify, sendMorningRecap, checkAndNotifyLAFC, sendMorningRecapLAFC } from "./jobs.js";
 
 const deps = { getRecentFinishedGames, getRecentFinishedHomeGames, publish };
@@ -18,12 +18,17 @@ const deps = { getRecentFinishedGames, getRecentFinishedHomeGames, publish };
 // know which of the (several) cron schedules just fired.
 const MORNING_CRON = "0 15 * * *";
 
+// One entry per sport/promo integration — add a row here when a new one is
+// added rather than editing scheduled() itself.
+const INTEGRATIONS = [
+  { check: checkAndNotify, recap: sendMorningRecap },
+  { check: checkAndNotifyLAFC, recap: sendMorningRecapLAFC },
+];
+
 export default {
   async scheduled(event, env, ctx) {
-    const jobs =
-      event.cron === MORNING_CRON
-        ? [sendMorningRecap(env, deps), sendMorningRecapLAFC(env, deps)]
-        : [checkAndNotify(env, deps), checkAndNotifyLAFC(env, deps)];
+    const isMorning = event.cron === MORNING_CRON;
+    const jobs = INTEGRATIONS.map((i) => (isMorning ? i.recap : i.check)(env, deps));
 
     // allSettled, not all — a broken LAFC/ESPN integration shouldn't take
     // down the Dodgers/Panda alerts, or vice versa.
@@ -44,8 +49,8 @@ export default {
         return new Response("forbidden", { status: 403 });
       }
       const target = url.searchParams.get("target"); // "lafc" | "ops" | omitted (default: Dodgers)
-      const topics =
-        target === "lafc" ? [env.NTFY_TOPIC_LAFC] : target === "ops" ? [env.NTFY_OPS_TOPIC] : undefined;
+      const topicByTarget = { lafc: env.NTFY_TOPIC_LAFC, ops: env.NTFY_OPS_TOPIC };
+      const topics = target ? [topicByTarget[target]] : dodgersTopics(env);
       if (target && !topics[0]) {
         return new Response(`no topic configured for target=${target}`, { status: 400 });
       }

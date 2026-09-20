@@ -9,15 +9,23 @@
 // our quota from unrelated traffic. Our own instance has no auth, so no
 // token is needed here.
 
-export async function publish(env, message, { title, topics } = {}) {
+// The Dodgers/Panda topic(s) — the only audience that gets an implicit
+// default; every other integration (LAFC, ops) must pass its own `topics`
+// explicitly so audiences never cross-post.
+export function dodgersTopics(env) {
+  return [env.NTFY_TOPIC || "ddbb-dodgers-panda-win", env.NTFY_TOPIC_PUBLIC].filter(Boolean);
+}
+
+// Same idea as dodgersTopics(), for the LAFC/Ono audience.
+export function lafcTopics(env) {
+  return [env.NTFY_TOPIC_LAFC, env.NTFY_TOPIC_LAFC_PUBLIC].filter(Boolean);
+}
+
+export async function publish(env, message, { title, topics }) {
   const server = env.NTFY_SERVER || "https://ntfy.sh";
-  // Explicit `topics` (e.g. the LAFC or ops alert topic) overrides the
-  // default Dodgers topic(s) entirely rather than adding to them — those
-  // are separate audiences that shouldn't cross-post to each other.
-  const targetTopics = topics || [env.NTFY_TOPIC || "ddbb-dodgers-panda-win", env.NTFY_TOPIC_PUBLIC].filter(Boolean);
 
   return Promise.all(
-    targetTopics.map(async (topic) => {
+    topics.map(async (topic) => {
       const res = await fetch(server, {
         method: "POST",
         headers: { "Content-Type": "application/json; charset=utf-8" },

@@ -1,8 +1,10 @@
 // src/jobs.js
-// The two jobs: notify immediately on a finished home win, and send a
-// bundled next-morning recap. No database — just a tiny per-game flag in
-// Workers KV so a game already published isn't published again. Flags
-// expire on their own after a couple of days, so nothing is kept around.
+// The check/recap job pairs for each integration (Dodgers/Panda, LAFC/Ono).
+// No database — just a tiny per-game flag in Workers KV so a game already
+// published isn't published again. Flags expire on their own after a
+// couple of days, so nothing is kept around.
+
+import { dodgersTopics, lafcTopics } from "./ntfy.js";
 
 const FLAG_TTL_SECONDS = 60 * 60 * 24 * 2; // 2 days — comfortably longer than the 24h lookback
 
@@ -15,12 +17,12 @@ async function setFlag(env, key) {
 }
 
 // ---------------------------------------------------------------------------
-// LAFC/Ono Hawaiian BBQ integration relies on an undocumented ESPN API (see
-// src/mls.js) that could change shape or start rejecting requests without
-// notice. Rather than fail silently, a broken run raises a one-time ops
-// alert to NTFY_OPS_TOPIC so it gets noticed and fixed. Deduped via a KV
-// flag with a shorter TTL than the win-flags above, so a persistent outage
-// pages once and then stays quiet instead of alerting on every cron tick.
+// Some integrations (currently just LAFC/ESPN) rely on an undocumented API
+// that could change shape or start rejecting requests without notice.
+// Rather than fail silently, a broken run raises a one-time ops alert to
+// NTFY_OPS_TOPIC so it gets noticed and fixed. Deduped via a KV flag with a
+// shorter TTL than the win-flags above, so a persistent outage pages once
+// and then stays quiet instead of alerting on every cron tick.
 // ---------------------------------------------------------------------------
 const OPS_ALERT_TTL_SECONDS = 60 * 60 * 6; // 6h
 
@@ -32,8 +34,56 @@ async function alertOps(env, deps, kind, message) {
 
   if (!env.NTFY_OPS_TOPIC) return; // no ops topic configured — logged above, nothing more to do
 
-  await deps.publish(env, message, { title: "⚠️ LAFC/Ono integration error", topics: [env.NTFY_OPS_TOPIC] });
+  await deps.publish(env, message, { title: `⚠️ Integration error (${kind})`, topics: [env.NTFY_OPS_TOPIC] });
   await env.DODGERS_KV.put(flagKey, "1", { expirationTtl: OPS_ALERT_TTL_SECONDS });
+}
+
+// ---------------------------------------------------------------------------
+// Shared shape behind every check/recap pair below: fetch games from the
+// source, optionally routing a fetch failure to an ops alert (`opsLabel`)
+// instead of letting it propagate, then filter down to the ones that matter.
+// Returns null if the fetch failed and was already routed to an ops alert.
+// ---------------------------------------------------------------------------
+async function fetchHits(env, deps, { getGames, filterHits, opsLabel, actionLabel }) {
+  let games;
+  if (!opsLabel) {
+    games = await getGames(env);
+  } else {
+    try {
+      games = await getGames(env);
+    } catch (err) {
+      const kind = err.kind || "unknown";
+      await alertOps(env, deps, `${opsLabel}-${kind}`, `${actionLabel} failed (${kind}): ${err.message}`);
+      return null;
+    }
+  }
+  return games.filter(filterHits);
+}
+
+// Publish immediately for every unflagged hit, then flag it.
+async function notifyOnce(env, deps, hits, { keyOf, buildMessage, publishOpts }) {
+  for (const hit of hits) {
+    const key = keyOf(hit);
+    if (await alreadyFlagged(env, key)) continue; // already published this one
+
+    await deps.publish(env, buildMessage(hit), publishOpts);
+    await setFlag(env, key);
+  }
+}
+
+// Bundle every unflagged hit into one recap message, then flag them all.
+async function sendRecap(env, deps, hits, { keyOf, buildSummary, buildText, publishOpts }) {
+  const pending = [];
+  for (const hit of hits) {
+    if (!(await alreadyFlagged(env, keyOf(hit)))) pending.push(hit);
+  }
+  if (pending.length === 0) return;
+
+  await deps.publish(env, buildText(pending.map(buildSummary)), publishOpts);
+
+  for (const hit of pending) {
+    await setFlag(env, keyOf(hit));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -43,21 +93,17 @@ async function alertOps(env, deps, kind, message) {
 // Dodgers just win at home" fresh each run.
 // ---------------------------------------------------------------------------
 export async function checkAndNotify(env, deps) {
-  const { getRecentFinishedGames } = deps;
-  const { publish } = deps;
+  const hits = await fetchHits(env, deps, {
+    getGames: deps.getRecentFinishedGames,
+    filterHits: (g) => g.isHomeGame && g.dodgersWon,
+  });
 
-  const games = await getRecentFinishedGames(env);
-  const wins = games.filter((g) => g.isHomeGame && g.dodgersWon);
-
-  for (const win of wins) {
-    const key = `notified:${win.gamePk}`;
-    if (await alreadyFlagged(env, key)) continue; // already published this one
-
-    await publish(env, `The Dodgers WIN at home! Final: ${win.summary}. Go Blue! Use code "DODGERSWIN" on the app for $7 Panda Plate.`, {
-      title: "⚾ Dodgers Win!",
-    });
-    await setFlag(env, key);
-  }
+  await notifyOnce(env, deps, hits, {
+    keyOf: (win) => `notified:${win.gamePk}`,
+    buildMessage: (win) =>
+      `The Dodgers WIN at home! Final: ${win.summary}. Go Blue! Use code "DODGERSWIN" on the app for $7 Panda Plate.`,
+    publishOpts: { title: "⚾ Dodgers Win!", topics: dodgersTopics(env) },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -66,29 +112,20 @@ export async function checkAndNotify(env, deps) {
 // sweep is one text, not two).
 // ---------------------------------------------------------------------------
 export async function sendMorningRecap(env, deps) {
-  const { getRecentFinishedGames } = deps;
-  const { publish } = deps;
+  const hits = await fetchHits(env, deps, {
+    getGames: deps.getRecentFinishedGames,
+    filterHits: (g) => g.isHomeGame && g.dodgersWon,
+  });
 
-  const games = await getRecentFinishedGames(env);
-  const wins = games.filter((g) => g.isHomeGame && g.dodgersWon);
-
-  const pending = [];
-  for (const win of wins) {
-    if (!(await alreadyFlagged(env, `recap:${win.gamePk}`))) pending.push(win);
-  }
-  if (pending.length === 0) return;
-
-  const summaries = pending.map((g) => `beat the ${g.opponent} ${g.dodgersScore}-${g.opponentScore}`);
-  const text =
-    summaries.length === 1
-      ? `Morning reminder: the Dodgers ${summaries[0]} at home last night! Go Blue! Use code "DODGERSWIN" on the app for $7 Panda Plate.`
-      : `Morning recap: the Dodgers ${summaries.join(", and ")} at home! Go Blue! Use code "DODGERSWIN" on the app for $7 Panda Plate.`;
-
-  await publish(env, text, { title: "☀️ Dodgers Morning Recap" });
-
-  for (const win of pending) {
-    await setFlag(env, `recap:${win.gamePk}`);
-  }
+  await sendRecap(env, deps, hits, {
+    keyOf: (win) => `recap:${win.gamePk}`,
+    buildSummary: (g) => `beat the ${g.opponent} ${g.dodgersScore}-${g.opponentScore}`,
+    buildText: (summaries) =>
+      summaries.length === 1
+        ? `Morning reminder: the Dodgers ${summaries[0]} at home last night! Go Blue! Use code "DODGERSWIN" on the app for $7 Panda Plate.`
+        : `Morning recap: the Dodgers ${summaries.join(", and ")} at home! Go Blue! Use code "DODGERSWIN" on the app for $7 Panda Plate.`,
+    publishOpts: { title: "☀️ Dodgers Morning Recap", topics: dodgersTopics(env) },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -99,59 +136,38 @@ export async function sendMorningRecap(env, deps) {
 // don't get LAFC alerts and vice versa.
 // ---------------------------------------------------------------------------
 export async function checkAndNotifyLAFC(env, deps) {
-  const { getRecentFinishedHomeGames, publish } = deps;
+  const hits = await fetchHits(env, deps, {
+    getGames: deps.getRecentFinishedHomeGames,
+    filterHits: (g) => g.scoredFirstInFirstHalf,
+    opsLabel: "lafc",
+    actionLabel: "LAFC check",
+  });
+  if (hits === null) return; // fetch failed; already routed to an ops alert
 
-  let games;
-  try {
-    games = await getRecentFinishedHomeGames(env);
-  } catch (err) {
-    await alertOps(env, deps, `lafc-${err.kind || "unknown"}`, `LAFC check failed (${err.kind || "unknown"}): ${err.message}`);
-    return;
-  }
-
-  const hits = games.filter((g) => g.scoredFirstInFirstHalf);
-
-  for (const hit of hits) {
-    const key = `lafc-notified:${hit.eventId}`;
-    if (await alreadyFlagged(env, key)) continue; // already published this one
-
-    await publish(
-      env,
+  await notifyOnce(env, deps, hits, {
+    keyOf: (hit) => `lafc-notified:${hit.eventId}`,
+    buildMessage: (hit) =>
       `LAFC scored first in the first half! Final: ${hit.summary}. Use code "LAFCSCORES" at Ono Hawaiian BBQ tomorrow for a $5.99 chicken plate.`,
-      { title: "⚽ LAFC Scores First!", topics: [env.NTFY_TOPIC_LAFC] }
-    );
-    await setFlag(env, key);
-  }
+    publishOpts: { title: "⚽ LAFC Scores First!", topics: lafcTopics(env) },
+  });
 }
 
 export async function sendMorningRecapLAFC(env, deps) {
-  const { getRecentFinishedHomeGames, publish } = deps;
+  const hits = await fetchHits(env, deps, {
+    getGames: deps.getRecentFinishedHomeGames,
+    filterHits: (g) => g.scoredFirstInFirstHalf,
+    opsLabel: "lafc",
+    actionLabel: "LAFC recap",
+  });
+  if (hits === null) return; // fetch failed; already routed to an ops alert
 
-  let games;
-  try {
-    games = await getRecentFinishedHomeGames(env);
-  } catch (err) {
-    await alertOps(env, deps, `lafc-${err.kind || "unknown"}`, `LAFC recap failed (${err.kind || "unknown"}): ${err.message}`);
-    return;
-  }
-
-  const hits = games.filter((g) => g.scoredFirstInFirstHalf);
-
-  const pending = [];
-  for (const hit of hits) {
-    if (!(await alreadyFlagged(env, `lafc-recap:${hit.eventId}`))) pending.push(hit);
-  }
-  if (pending.length === 0) return;
-
-  const summaries = pending.map((g) => `scored first against the ${g.opponent} (final: ${g.summary})`);
-  const text =
-    summaries.length === 1
-      ? `Morning reminder: LAFC ${summaries[0]} last night! Use code "LAFCSCORES" at Ono Hawaiian BBQ today for a $5.99 chicken plate.`
-      : `Morning recap: LAFC ${summaries.join(", and ")}! Use code "LAFCSCORES" at Ono Hawaiian BBQ today for a $5.99 chicken plate.`;
-
-  await publish(env, text, { title: "☀️ LAFC Morning Recap", topics: [env.NTFY_TOPIC_LAFC] });
-
-  for (const hit of pending) {
-    await setFlag(env, `lafc-recap:${hit.eventId}`);
-  }
+  await sendRecap(env, deps, hits, {
+    keyOf: (hit) => `lafc-recap:${hit.eventId}`,
+    buildSummary: (g) => `scored first against the ${g.opponent} (final: ${g.summary})`,
+    buildText: (summaries) =>
+      summaries.length === 1
+        ? `Morning reminder: LAFC ${summaries[0]} last night! Use code "LAFCSCORES" at Ono Hawaiian BBQ today for a $5.99 chicken plate.`
+        : `Morning recap: LAFC ${summaries.join(", and ")}! Use code "LAFCSCORES" at Ono Hawaiian BBQ today for a $5.99 chicken plate.`,
+    publishOpts: { title: "☀️ LAFC Morning Recap", topics: lafcTopics(env) },
+  });
 }
